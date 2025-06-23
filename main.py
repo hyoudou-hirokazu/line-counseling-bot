@@ -5,9 +5,9 @@ from dotenv import load_dotenv
 
 # LINE Bot SDK v3 のインポート
 from linebot.v3.webhook import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage as LineReplyTextMessage # Reply用のTextMessageにエイリアス
-from linebot.v3.webhooks import MessageEvent # MessageEventはここから
-from linebot.v3.webhooks.messages import TextMessage as WebhookTextMessage # Webhookで受け取るTextMessageにエイリアス
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage as LineReplyTextMessage
+from linebot.v3.webhooks import MessageEvent
+from linebot.v3.webhooks.models import TextMessage as WebhookTextMessage # ここを linebot.v3.webhooks.models に変更しました！
 from linebot.v3.exceptions import InvalidSignatureError
 
 import google.generativeai as genai
@@ -76,7 +76,7 @@ def callback():
 
     return 'OK'
 
-@handler.add(MessageEvent, message=WebhookTextMessage) # ここを WebhookTextMessage に変更！
+@handler.add(MessageEvent, message=WebhookTextMessage)
 def handle_message(event):
     user_message = event.message.text
     app.logger.info(f"Received message from user: '{user_message}' (Reply Token: {event.reply_token})")
@@ -108,7 +108,7 @@ def handle_message(event):
             line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[LineReplyTextMessage(text=response_text)] # こちらはLineReplyTextMessageを使用
+                    messages=[LineReplyTextMessage(text=response_text)]
                 )
             )
             app.logger.info("Reply sent to LINE successfully.")
