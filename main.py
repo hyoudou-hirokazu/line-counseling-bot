@@ -72,35 +72,48 @@ def callback():
     app.logger.info("X-Line-Signature: " + signature)
 
     # Bot側で計算した署名とLINEから送られてきた署名を比較するためのデバッグログ
+    # ※このブロックは、SDKがなぜエラーを出すのかを特定するために一時的に追加しています。
+    # 署名が一致しているにも関わらずエラーが出る場合は、SDKの内部挙動を疑う必要があります。
+    calculated_signature = ""
     try:
         secret_bytes = CHANNEL_SECRET.encode('utf-8')
         body_bytes = body.encode('utf-8')
         hash_value = hmac.new(secret_bytes, body_bytes, hashlib.sha256).digest()
         calculated_signature = base64.b64encode(hash_value).decode('utf-8')
         
-        app.logger.info(f"Calculated signature: {calculated_signature}")
-        app.logger.info(f"Received signature: {signature}")
-        
+        app.logger.info(f"Calculated signature (manual): {calculated_signature}")
+        app.logger.info(f"Received signature (from header): {signature}") # ログ名をより明確に
+
+        # ここで直接比較し、もし不一致ならSDKのエラー発生前にabort
         if calculated_signature != signature:
-            app.logger.error("Signature mismatch detected before handler.handle()")
+            app.logger.error("!!! Manual Signature MISMATCH detected !!!")
             app.logger.error(f"  Calculated: {calculated_signature}")
             app.logger.error(f"  Received:   {signature}")
+            app.logger.error(f"  Channel Secret used for manual calc: {CHANNEL_SECRET}")
+            abort(400) # 明示的に400を返す
+        else:
+            app.logger.info("Manual signature check: Signatures match! Proceeding to SDK handler.")
 
     except Exception as e:
         app.logger.error(f"Error during manual signature calculation for debug: {e}", exc_info=True)
-
+        # 手動計算でエラーが発生しても、SDKの処理は試みる
+        pass
 
     try:
+        # LINE Bot SDKのハンドラーを使って署名を検証し、イベントを処理
+        # ここで InvalidSignatureError が出る場合、SDKの内部、または環境固有の問題の可能性が高い
         handler.handle(body, signature)
+        app.logger.info("Webhook handled successfully by SDK.") # SDKが正常処理した場合のログ
     except InvalidSignatureError:
-        app.logger.error("Invalid signature. Check your channel access token/channel secret in LINE Developers and Render.")
-        app.logger.error(f"Received body (truncated): {body[:200]}...")
-        app.logger.error(f"Received signature: {signature}")
-        app.logger.error(f"Channel Secret used for calculation: {CHANNEL_SECRET}")
-        abort(400)
+        app.logger.error("!!! SDK detected Invalid signature !!!")
+        app.logger.error("  Please check your channel access token/channel secret in LINE Developers and Render.")
+        app.logger.error(f"  Body (truncated for error log): {body[:200]}...")
+        app.logger.error(f"  Signature sent to SDK: {signature}")
+        app.logger.error(f"  Channel Secret configured for SDK: {CHANNEL_SECRET}")
+        abort(400) # 署名エラーの場合は400を返す
     except Exception as e:
-        app.logger.error(f"Error handling webhook: {e}", exc_info=True)
-        abort(500)
+        app.logger.error(f"Error handling webhook with SDK: {e}", exc_info=True)
+        abort(500) # その他のエラーの場合は500を返す
 
     return 'OK'
 
