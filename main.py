@@ -4,7 +4,7 @@ from dotenv import load_dotenv # python-dotenv のインポート
 
 # LINE Bot SDK v3 のインポート
 from linebot.v3.webhook import WebhookHandler # ここを修正しました！
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage, WebhookEndpoint
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage # ここからWebhookEndpointを削除しました！
 from linebot.v3.exceptions import InvalidSignatureError
 
 import google.generativeai as genai
@@ -85,3 +85,4 @@ def handle_message(event):
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
