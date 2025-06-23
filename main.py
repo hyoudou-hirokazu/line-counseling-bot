@@ -10,6 +10,11 @@ from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMe
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 
+# 署名検証のためのライブラリをインポート
+import hmac
+import hashlib
+import base64
+
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
@@ -47,10 +52,10 @@ try:
     gemini_model = genai.GenerativeModel(
         'gemini-pro',
         safety_settings={
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
     )
     logging.info("Gemini API configured successfully.")
@@ -64,14 +69,34 @@ def callback():
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
     app.logger.info("Request body: " + body)
-    app.logger.info("X-Line-Signature: " + signature) # デバッグ用追加ログ
+    app.logger.info("X-Line-Signature: " + signature)
+
+    # Bot側で計算した署名とLINEから送られてきた署名を比較するためのデバッグログ
+    try:
+        secret_bytes = CHANNEL_SECRET.encode('utf-8')
+        body_bytes = body.encode('utf-8')
+        hash_value = hmac.new(secret_bytes, body_bytes, hashlib.sha256).digest()
+        calculated_signature = base64.b64encode(hash_value).decode('utf-8')
+        
+        app.logger.info(f"Calculated signature: {calculated_signature}")
+        app.logger.info(f"Received signature: {signature}")
+        
+        if calculated_signature != signature:
+            app.logger.error("Signature mismatch detected before handler.handle()")
+            app.logger.error(f"  Calculated: {calculated_signature}")
+            app.logger.error(f"  Received:   {signature}")
+
+    except Exception as e:
+        app.logger.error(f"Error during manual signature calculation for debug: {e}", exc_info=True)
+
 
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         app.logger.error("Invalid signature. Check your channel access token/channel secret in LINE Developers and Render.")
-        app.logger.error(f"Received body (truncated): {body[:200]}...") # デバッグ用追加ログ
-        app.logger.error(f"Received signature: {signature}") # デバッグ用追加ログ
+        app.logger.error(f"Received body (truncated): {body[:200]}...")
+        app.logger.error(f"Received signature: {signature}")
+        app.logger.error(f"Channel Secret used for calculation: {CHANNEL_SECRET}")
         abort(400)
     except Exception as e:
         app.logger.error(f"Error handling webhook: {e}", exc_info=True)
