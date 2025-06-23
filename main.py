@@ -4,10 +4,10 @@ from flask import Flask, request, abort
 from dotenv import load_dotenv
 
 # LINE Bot SDK v3 のインポート
-from linebot.v3.webhook import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage as LineReplyTextMessage
-from linebot.v3.webhooks import MessageEvent
-from linebot.v3.webhooks.models import TextMessage as WebhookTextMessage # ここを linebot.v3.webhooks.models に変更しました！
+# 各クラスを具体的なパスから明示的にインポートすることで、将来のSDK変更に強くする
+from linebot.v3.webhook import WebhookHandler # WebhookHandlerのインポートパス
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage as LineReplyTextMessage # Reply用のTextMessageにエイリアス
+from linebot.v3.webhooks import MessageEvent, TextMessageContent # ここを修正しました！MessageEventとTextMessageContentをインポート
 from linebot.v3.exceptions import InvalidSignatureError
 
 import google.generativeai as genai
@@ -76,8 +76,9 @@ def callback():
 
     return 'OK'
 
-@handler.add(MessageEvent, message=WebhookTextMessage)
+@handler.add(MessageEvent, message=TextMessageContent) # ここを TextMessageContent に変更しました！
 def handle_message(event):
+    # event.message は TextMessageContent のインスタンスであると想定
     user_message = event.message.text
     app.logger.info(f"Received message from user: '{user_message}' (Reply Token: {event.reply_token})")
 
