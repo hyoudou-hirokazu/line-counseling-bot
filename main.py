@@ -1,15 +1,15 @@
 import os
 from flask import Flask, request, abort
-from dotenv import load_dotenv
+from dotenv import load_dotenv # python-dotenv のインポート
 
-# --- 変更点ここから ---
-from linebot.v3.webhooks import WebhookHandler
+# LINE Bot SDK v3 のインポート
+from linebot.v3.webhook import WebhookHandler # ここを修正しました！
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage, WebhookEndpoint
 from linebot.v3.exceptions import InvalidSignatureError
-# --- 変更点ここまで ---
 
 import google.generativeai as genai
 
+# .envファイルから環境変数を読み込む（Renderでは不要だが、ローカル実行時のために残しておく）
 load_dotenv()
 
 app = Flask(__name__)
@@ -20,6 +20,7 @@ CHANNEL_SECRET = os.getenv('CHANNEL_SECRET')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 # 環境変数が設定されているか確認
+# ※Render上で環境変数が正しく設定されていれば、このエラーは発生しない
 if not CHANNEL_ACCESS_TOKEN:
     raise ValueError("CHANNEL_ACCESS_TOKEN is not set.")
 if not CHANNEL_SECRET:
@@ -27,12 +28,9 @@ if not CHANNEL_SECRET:
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY is not set.")
 
-# --- 変更点ここから ---
-# LINE Messaging API の設定
+# LINE Messaging API v3 の設定
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 line_bot_api = MessagingApi(ApiClient(configuration))
-# --- 変更点ここまで ---
-
 handler = WebhookHandler(CHANNEL_SECRET)
 
 # Gemini API の設定
@@ -49,7 +47,7 @@ def callback():
         handler.handle(body, signature)
     except InvalidSignatureError:
         app.logger.error("Invalid signature. Check your channel access token/channel secret.")
-        abort(400)
+        abort(400) # LINE Developersでの検証時に出るエラーコードと同じ
     except Exception as e:
         app.logger.error(f"Error handling webhook: {e}")
         abort(500)
@@ -67,28 +65,23 @@ def handle_message(event):
         response_text = gemini_response.text
         app.logger.info(f"Gemini response: {response_text}")
 
-        # LINEに返信
-        # --- 変更点ここから ---
+        # LINEに返信 (v3対応)
         line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
                 messages=[TextMessage(text=response_text)]
             )
         )
-        # --- 変更点ここまで ---
 
     except Exception as e:
         app.logger.error(f"Error generating Gemini response or replying: {e}")
-        # エラーが発生した場合もユーザーに何らかの応答をする
-        # --- 変更点ここから ---
+        # エラーが発生した場合もユーザーに何らかの応答をする (v3対応)
         line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
                 messages=[TextMessage(text="申し訳ありません、現在メッセージを処理できません。しばらくしてからもう一度お試しください。")]
             )
         )
-        # --- 変更点ここまで ---
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
