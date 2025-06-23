@@ -5,9 +5,9 @@ from dotenv import load_dotenv
 
 # LINE Bot SDK v3 のインポート
 # 各クラスを具体的なパスから明示的にインポートすることで、将来のSDK変更に強くする
-from linebot.v3.webhook import WebhookHandler # WebhookHandlerのインポートパス
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage as LineReplyTextMessage # Reply用のTextMessageにエイリアス
-from linebot.v3.webhooks import MessageEvent, TextMessageContent # ここを修正しました！MessageEventとTextMessageContentをインポート
+from linebot.v3.webhook import WebhookHandler
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage as LineReplyTextMessage
+from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 
 import google.generativeai as genai
@@ -64,11 +64,14 @@ def callback():
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
     app.logger.info("Request body: " + body)
+    app.logger.info("X-Line-Signature: " + signature) # デバッグ用追加ログ
 
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         app.logger.error("Invalid signature. Check your channel access token/channel secret in LINE Developers and Render.")
+        app.logger.error(f"Received body (truncated): {body[:200]}...") # デバッグ用追加ログ
+        app.logger.error(f"Received signature: {signature}") # デバッグ用追加ログ
         abort(400)
     except Exception as e:
         app.logger.error(f"Error handling webhook: {e}", exc_info=True)
@@ -76,7 +79,7 @@ def callback():
 
     return 'OK'
 
-@handler.add(MessageEvent, message=TextMessageContent) # ここを TextMessageContent に変更しました！
+@handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     # event.message は TextMessageContent のインスタンスであると想定
     user_message = event.message.text
@@ -86,7 +89,7 @@ def handle_message(event):
 
     try:
         gemini_response = gemini_model.generate_content(user_message)
-
+        
         if hasattr(gemini_response, 'text'):
             response_text = gemini_response.text
         elif isinstance(gemini_response, list) and gemini_response:
