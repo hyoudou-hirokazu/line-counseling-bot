@@ -5,17 +5,22 @@ from dotenv import load_dotenv
 
 # LINE Bot SDK v3 のインポート
 # 各クラスを具体的なパスから明示的にインポートすることで、将来のSDK変更に強くする
+# TextMessageのインポートパスは、過去のバージョンでの変更履歴を考慮し、
+# linebot.v3.messaging と linebot.v3.webhooks.models からのimportを両方試すようにコメントで示唆。
+# 現在のコードでは linebot.v3.messaging.TextMessage を使用
 from linebot.v3.webhook import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage as LineReplyTextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
-from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest
+from linebot.v3.messaging import TextMessage as LineReplyTextMessage # LINEへの返信用テキストメッセージ
+from linebot.v3.webhooks import MessageEvent, TextMessageContent # 受信イベントのメッセージコンテンツ
 
 # 署名検証のためのライブラリをインポート
 import hmac
 import hashlib
 import base64
 
+# Google Generative AI SDK のインポート
 import google.generativeai as genai
+# HarmCategoryの属性名変更に対応するため、HarmCategoryとHarmBlockThresholdを明示的にインポート
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # ロギング設定
@@ -52,15 +57,18 @@ try:
     gemini_model = genai.GenerativeModel(
         'gemini-pro',
         safety_settings={
-            HarmCategory.HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            # HarmCategoryの属性名が変更された場合に対応 (例: HARASSMENT -> HARM_CATEGORY_HARASSMENT)
+            # 現在のSDKバージョンに合わせて修正済み
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
     )
     logging.info("Gemini API configured successfully.")
 except Exception as e:
-    logging.critical(f"Failed to configure Gemini API: {e}. Please check GEMINI_API_KEY.")
+    # Gemini APIの設定失敗時はアプリケーションを起動させない
+    logging.critical(f"Failed to configure Gemini API: {e}. Please check GEMINI_API_KEY and google-generativeai version.")
     raise Exception(f"Gemini API configuration failed: {e}")
 
 
@@ -68,13 +76,11 @@ except Exception as e:
 def callback():
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
-    app.logger.info("Request body: " + body)
+    app.logger.info("Request body (truncated to 500 chars): " + body[:500]) # 長いボディは切り詰める
     app.logger.info("X-Line-Signature: " + signature)
 
     # Bot側で計算した署名とLINEから送られてきた署名を比較するためのデバッグログ
-    # ※このブロックは、SDKがなぜエラーを出すのかを特定するために一時的に追加しています。
-    # 署名が一致しているにも関わらずエラーが出る場合は、SDKの内部挙動を疑う必要があります。
-    calculated_signature = ""
+    # Invalid signatureエラーのデバッグ用に残しておく
     try:
         secret_bytes = CHANNEL_SECRET.encode('utf-8')
         body_bytes = body.encode('utf-8')
@@ -82,15 +88,15 @@ def callback():
         calculated_signature = base64.b64encode(hash_value).decode('utf-8')
         
         app.logger.info(f"Calculated signature (manual): {calculated_signature}")
-        app.logger.info(f"Received signature (from header): {signature}") # ログ名をより明確に
+        app.logger.info(f"Received signature (from header): {signature}")
 
-        # ここで直接比較し、もし不一致ならSDKのエラー発生前にabort
         if calculated_signature != signature:
             app.logger.error("!!! Manual Signature MISMATCH detected !!!")
             app.logger.error(f"  Calculated: {calculated_signature}")
             app.logger.error(f"  Received:   {signature}")
-            app.logger.error(f"  Channel Secret used for manual calc: {CHANNEL_SECRET}")
-            abort(400) # 明示的に400を返す
+            app.logger.error(f"  Channel Secret used for manual calc (first 5 chars): {CHANNEL_SECRET[:5]}...") # シークレット全体はログに出さない
+            # 手動計算で不一致が検出された場合は、SDK処理前に終了
+            abort(400) 
         else:
             app.logger.info("Manual signature check: Signatures match! Proceeding to SDK handler.")
 
@@ -101,7 +107,6 @@ def callback():
 
     try:
         # LINE Bot SDKのハンドラーを使って署名を検証し、イベントを処理
-        # ここで InvalidSignatureError が出る場合、SDKの内部、または環境固有の問題の可能性が高い
         handler.handle(body, signature)
         app.logger.info("Webhook handled successfully by SDK.") # SDKが正常処理した場合のログ
     except InvalidSignatureError:
@@ -109,11 +114,12 @@ def callback():
         app.logger.error("  Please check your channel access token/channel secret in LINE Developers and Render.")
         app.logger.error(f"  Body (truncated for error log): {body[:200]}...")
         app.logger.error(f"  Signature sent to SDK: {signature}")
-        app.logger.error(f"  Channel Secret configured for SDK: {CHANNEL_SECRET}")
+        app.logger.error(f"  Channel Secret configured for SDK (first 5 chars): {CHANNEL_SECRET[:5]}...")
         abort(400) # 署名エラーの場合は400を返す
     except Exception as e:
-        app.logger.error(f"Error handling webhook with SDK: {e}", exc_info=True)
-        abort(500) # その他のエラーの場合は500を返す
+        # その他の予期せぬエラー
+        logging.critical(f"Unhandled error during webhook processing: {e}", exc_info=True)
+        abort(500)
 
     return 'OK'
 
@@ -131,6 +137,7 @@ def handle_message(event):
         if hasattr(gemini_response, 'text'):
             response_text = gemini_response.text
         elif isinstance(gemini_response, list) and gemini_response:
+            # Geminiがリスト形式で応答を返す可能性も考慮
             if hasattr(gemini_response[0], 'text'):
                 response_text = gemini_response[0].text
             else:
@@ -142,10 +149,12 @@ def handle_message(event):
         app.logger.info(f"Gemini response: '{response_text}'")
 
     except Exception as e:
+        # Gemini APIとの通信エラーをログに記録し、ユーザーにエラーを通知
         logging.error(f"Error interacting with Gemini API: {e}", exc_info=True)
         response_text = "Geminiとの通信中にエラーが発生しました。時間を置いてお試しください。"
 
     finally:
+        # 最終的にLINEに返信する
         try:
             line_bot_api.reply_message(
                 ReplyMessageRequest(
@@ -155,8 +164,12 @@ def handle_message(event):
             )
             app.logger.info("Reply sent to LINE successfully.")
         except Exception as e:
+            # LINEへの返信失敗もログに記録
             logging.error(f"Error replying to LINE: {e}", exc_info=True)
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
+    # Flaskのデバッグモードは本番環境では無効にするべきだが、
+    # RenderはGunicornなどで起動するため、ここでは直接app.runは本番環境では使われない。
+    # app.run(host='0.0.0.0', port=port, debug=True) # デバッグ時はTrue
     app.run(host='0.0.0.0', port=port)
