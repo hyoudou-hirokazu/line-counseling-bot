@@ -59,9 +59,12 @@ except Exception as e:
 
 # Gemini API の設定
 try:
+    # --- ここを修正しました ---
+    # Google AI Studioで確認した正確なモデル名 'gemini-2.5-flash-lite-preview-06-17' に変更
+    # もしこれがうまくいかない場合は、'gemini-2.5-flash' や 'gemini-pro' なども試してみてください。
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel(
-        'gemini-flash', # ここを 'gemini-flash' に変更
+        'gemini-2.5-flash-lite-preview-06-17', # ★ここを修正★
         safety_settings={
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
             HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -69,9 +72,9 @@ try:
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
     )
-    logging.info("Gemini API configured successfully using 'gemini-flash' model.")
+    logging.info("Gemini API configured successfully using 'gemini-2.5-flash-lite-preview-06-17' model.")
 except Exception as e:
-    logging.critical(f"Failed to configure Gemini API: {e}. Please check GEMINI_API_KEY and 'google-generativeai' library version in requirements.txt. Also ensure 'gemini-flash' model is available for your API Key/Region.")
+    logging.critical(f"Failed to configure Gemini API: {e}. Please check GEMINI_API_KEY and 'google-generativeai' library version in requirements.txt. Also ensure 'gemini-2.5-flash-lite-preview-06-17' model is available for your API Key/Region.")
     raise Exception(f"Gemini API configuration failed: {e}")
 
 
@@ -141,9 +144,13 @@ def handle_message(event):
     try:
         gemini_response = gemini_model.generate_content(user_message)
         
+        # Gemini APIの応答形式は generate_content の結果によって異なる場合があるため、
+        # .text プロパティの有無を確認してからアクセスします。
+        # SDKのバージョンやAPIのアップデートにより、応答オブジェクトの構造が変わる可能性も考慮
         if gemini_response and hasattr(gemini_response, 'text'):
             response_text = gemini_response.text
         elif isinstance(gemini_response, list) and gemini_response and hasattr(gemini_response[0], 'text'):
+            # generate_contentがリストを返す場合（例: 複数のコンテンツパートがある場合）
             response_text = gemini_response[0].text
         else:
             logging.warning(f"Unexpected Gemini response format or no text content: {gemini_response}")
@@ -153,6 +160,7 @@ def handle_message(event):
 
     except Exception as e:
         logging.error(f"Error interacting with Gemini API: {e}", exc_info=True)
+        # Gemini APIのエラーメッセージをユーザーに直接見せないようにする
         response_text = "Geminiとの通信中にエラーが発生しました。時間を置いてお試しください。"
 
     finally:
