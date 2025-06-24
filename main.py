@@ -31,8 +31,6 @@ load_dotenv()
 CHANNEL_ACCESS_TOKEN = os.getenv('CHANNEL_ACCESS_TOKEN')
 CHANNEL_SECRET = os.getenv('CHANNEL_SECRET')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-# Renderが設定するPORT環境変数を明示的に取得 (Gunicornが自動的に使うため、ここでは直接使用しないが、存在チェックは残す)
-# RENDER_PORT = os.getenv('PORT') # この行はもはやFlaskのapp.runで直接使わないので削除しても良いが、チェック用には残す
 
 # 環境変数が設定されているか確認
 if not CHANNEL_ACCESS_TOKEN:
@@ -128,7 +126,7 @@ user_sessions = {}
 def callback():
     signature = request.headers.get('X-Line-Signature')
     body = request.get_data(as_text=True)
-
+    
     if not signature:
         app.logger.error("X-Line-Signature header is missing.")
         abort(400) # 署名がない場合は不正なリクエストとして処理
@@ -143,7 +141,7 @@ def callback():
         body_bytes = body.encode('utf-8')
         hash_value = hmac.new(secret_bytes, body_bytes, hashlib.sha256).digest()
         calculated_signature = base64.b64encode(hash_value).decode('utf-8')
-
+        
         app.logger.info(f"  Calculated signature (manual): {calculated_signature}")
         app.logger.info(f"  Channel Secret used for manual calc (first 5 chars): {CHANNEL_SECRET[:5]}...")
 
@@ -189,7 +187,7 @@ def handle_message(event):
 
     # ユーザーセッションの初期化または取得
     current_date = datetime.date.today()
-
+    
     # 新規ユーザーまたはセッションリセットのロジックをより堅牢に
     if user_id not in user_sessions or user_sessions[user_id]['last_request_date'] != current_date:
         # 日付が変わった場合、または新規ユーザーの場合、セッションをリセット
@@ -199,7 +197,7 @@ def handle_message(event):
             'last_request_date': current_date
         }
         app.logger.info(f"Initialized/Reset session for user_id: {user_id}. First message of the day or new user.")
-
+        
         # 初回メッセージを送信し、このリクエストの処理を終了
         response_text = INITIAL_MESSAGE
         try:
@@ -227,7 +225,7 @@ def handle_message(event):
             )
             app.logger.info(f"Sent limit message to LINE for user {user_id}.")
         except Exception as e:
-            logging.error(f"Error sending limit reply to LINE: {e}", exc_info=True)
+            logging.error(f"Error sending limit reply to LINE for user {user_id}: {e}", exc_info=True)
         return 'OK'
 
     # 会話履歴を準備
@@ -235,14 +233,11 @@ def handle_message(event):
     chat_history_for_gemini.append({'role': 'model', 'parts': [{'text': "はい、承知いたしました。こころコンパスとして、心を込めてお話をお伺いします。"}]})
 
     start_index = max(0, len(user_sessions[user_id]['history']) - MAX_CONTEXT_TURNS * 2)
-
+    
     app.logger.debug(f"Current history length for user {user_id}: {len(user_sessions[user_id]['history'])}. Taking from index {start_index}.")
 
     for role, text_content in user_sessions[user_id]['history'][start_index:]:
         chat_history_for_gemini.append({'role': role, 'parts': [{'text': text_content}]})
-
-    # 現在のユーザーメッセージを追加 (convo.send_messageで送るので、historyには含めない)
-    # chat_history_for_gemini.append({'role': 'user', 'parts': [{'text': user_message}]}) # この行はsend_messageを使う場合は不要になる
 
     app.logger.debug(f"Gemini chat history prepared for user {user_id} (last message: '{user_message}'): {chat_history_for_gemini}")
 
@@ -264,7 +259,7 @@ def handle_message(event):
         # 会話履歴を更新
         user_sessions[user_id]['history'].append(['user', user_message])
         user_sessions[user_id]['history'].append(['model', response_text])
-
+        
         # リクエスト数をインクリメント
         user_sessions[user_id]['request_count'] += 1
         user_sessions[user_id]['last_request_date'] = current_date # リクエスト日を更新
