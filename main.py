@@ -31,8 +31,8 @@ load_dotenv()
 CHANNEL_ACCESS_TOKEN = os.getenv('CHANNEL_ACCESS_TOKEN')
 CHANNEL_SECRET = os.getenv('CHANNEL_SECRET')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-# Renderが設定するPORT環境変数を明示的に取得
-RENDER_PORT = os.getenv('PORT')
+# Renderが設定するPORT環境変数を明示的に取得 (Gunicornが自動的に使うため、ここでは直接使用しないが、存在チェックは残す)
+# RENDER_PORT = os.getenv('PORT') # この行はもはやFlaskのapp.runで直接使わないので削除しても良いが、チェック用には残す
 
 # 環境変数が設定されているか確認
 if not CHANNEL_ACCESS_TOKEN:
@@ -44,10 +44,9 @@ if not CHANNEL_SECRET:
 if not GEMINI_API_KEY:
     logging.critical("GEMINI_API_KEY is not set in environment variables.")
     raise ValueError("GEMINI_API_KEY is not set. Please set it in Render Environment Variables.")
-if not RENDER_PORT:
-    logging.critical("PORT environment variable is not set by Render. This is unexpected.")
-    # RenderでPORTが設定されない場合を考慮し、デフォルト値を持たせない。
-    # Renderの環境ではPORTが必ず設定されるはずなので、設定されていない場合はエラーとして扱う。
+# PORT環境変数がない場合のエラーチェック。Gunicornがこれを必要とするため。
+if not os.getenv('PORT'):
+    logging.critical("PORT environment variable is not set by Render. This is unexpected for a Web Service.")
     raise ValueError("PORT environment variable is not set. Ensure this is deployed on a platform like Render.")
 
 
@@ -123,14 +122,13 @@ MAX_CONTEXT_TURNS = 6 # (ユーザーの発言 + AIの返答) の合計ターン
 # user_sessions のデータが失われます。
 # 永続的なデータストア（例: RenderのPostgreSQL, Redis, Google Cloud Firestore, AWS DynamoDBなど）
 # を利用することを強く推奨します。
-# 構造: {user_id: {'history': [{'role': 'user', 'parts': [{text: '...'}]}, ...], 'request_count': int, 'last_request_date': date}}
 user_sessions = {}
 
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers.get('X-Line-Signature')
     body = request.get_data(as_text=True)
-    
+
     if not signature:
         app.logger.error("X-Line-Signature header is missing.")
         abort(400) # 署名がない場合は不正なリクエストとして処理
@@ -145,7 +143,7 @@ def callback():
         body_bytes = body.encode('utf-8')
         hash_value = hmac.new(secret_bytes, body_bytes, hashlib.sha256).digest()
         calculated_signature = base64.b64encode(hash_value).decode('utf-8')
-        
+
         app.logger.info(f"  Calculated signature (manual): {calculated_signature}")
         app.logger.info(f"  Channel Secret used for manual calc (first 5 chars): {CHANNEL_SECRET[:5]}...")
 
@@ -191,7 +189,7 @@ def handle_message(event):
 
     # ユーザーセッションの初期化または取得
     current_date = datetime.date.today()
-    
+
     # 新規ユーザーまたはセッションリセットのロジックをより堅牢に
     if user_id not in user_sessions or user_sessions[user_id]['last_request_date'] != current_date:
         # 日付が変わった場合、または新規ユーザーの場合、セッションをリセット
@@ -201,10 +199,8 @@ def handle_message(event):
             'last_request_date': current_date
         }
         app.logger.info(f"Initialized/Reset session for user_id: {user_id}. First message of the day or new user.")
-        
+
         # 初回メッセージを送信し、このリクエストの処理を終了
-        # 初回メッセージ送信時の返信トークンは一度しか使えないため、
-        # ここで処理を終了し、Gemini呼び出しは次のユーザーメッセージで行う。
         response_text = INITIAL_MESSAGE
         try:
             line_bot_api.reply_message(
@@ -219,7 +215,6 @@ def handle_message(event):
         return 'OK' # 初回メッセージ送信後はここで処理を終了
 
     # Gemini API利用回数制限のチェック
-    # このチェックは、初回メッセージ送信後に行うべき（初回メッセージ自体はカウントしない）
     if user_sessions[user_id]['request_count'] >= MAX_GEMINI_REQUESTS_PER_DAY:
         response_text = GEMINI_LIMIT_MESSAGE
         app.logger.warning(f"User {user_id} exceeded daily Gemini request limit ({MAX_GEMINI_REQUESTS_PER_DAY}).")
@@ -236,28 +231,24 @@ def handle_message(event):
         return 'OK'
 
     # 会話履歴を準備
-    # システムプロンプトを履歴の先頭に設定
     chat_history_for_gemini = [{'role': 'user', 'parts': [{'text': COUNSELING_SYSTEM_PROMPT}]}]
-    chat_history_for_gemini.append({'role': 'model', 'parts': [{'text': "はい、承知いたしました。こころコンパスとして、心を込めてお話をお伺いします。"}]}) # システムプロンプトへのAIの承諾応答
+    chat_history_for_gemini.append({'role': 'model', 'parts': [{'text': "はい、承知いたしました。こころコンパスとして、心を込めてお話をお伺いします。"}]})
 
-    # MAX_CONTEXT_TURNS に基づいて過去の会話履歴を追加
-    start_index = max(0, len(user_sessions[user_id]['history']) - MAX_CONTEXT_TURNS * 2) # 最新のNターンを取得
-    
+    start_index = max(0, len(user_sessions[user_id]['history']) - MAX_CONTEXT_TURNS * 2)
+
     app.logger.debug(f"Current history length for user {user_id}: {len(user_sessions[user_id]['history'])}. Taking from index {start_index}.")
 
     for role, text_content in user_sessions[user_id]['history'][start_index:]:
         chat_history_for_gemini.append({'role': role, 'parts': [{'text': text_content}]})
 
-    # 現在のユーザーメッセージを追加
-    chat_history_for_gemini.append({'role': 'user', 'parts': [{'text': user_message}]})
+    # 現在のユーザーメッセージを追加 (convo.send_messageで送るので、historyには含めない)
+    # chat_history_for_gemini.append({'role': 'user', 'parts': [{'text': user_message}]}) # この行はsend_messageを使う場合は不要になる
 
     app.logger.debug(f"Gemini chat history prepared for user {user_id} (last message: '{user_message}'): {chat_history_for_gemini}")
 
-
     try:
         # Geminiとのチャットセッションを開始
-        # history引数にこれまでの会話履歴をすべて渡す
-        convo = gemini_model.start_chat(history=chat_history_for_gemini[:-1]) # 最後のユーザーメッセージはsend_messageで送るため除外
+        convo = gemini_model.start_chat(history=chat_history_for_gemini)
         gemini_response = convo.send_message(user_message) # 最新のユーザーメッセージのみをsend_messageで送る
 
         if gemini_response and hasattr(gemini_response, 'text'):
@@ -273,7 +264,7 @@ def handle_message(event):
         # 会話履歴を更新
         user_sessions[user_id]['history'].append(['user', user_message])
         user_sessions[user_id]['history'].append(['model', response_text])
-        
+
         # リクエスト数をインクリメント
         user_sessions[user_id]['request_count'] += 1
         user_sessions[user_id]['last_request_date'] = current_date # リクエスト日を更新
@@ -297,10 +288,8 @@ def handle_message(event):
 
     return 'OK'
 
-if __name__ == "__main__":
-    # Renderが設定するPORT環境変数を明示的に使用
-    # Renderは、環境変数PORTを必ず設定するため、デフォルト値は不要。
-    # 設定されていない場合は、初期のチェックでエラーになる。
-    port = int(RENDER_PORT) 
-    app.logger.info(f"Starting Flask app on host 0.0.0.0 and port {port}")
-    app.run(host='0.0.0.0', port=port, threaded=True) # threaded=Trueを追加して並列処理を可能に
+# Flask開発サーバーの直接起動は削除。代わりにGunicornを使う。
+# if __name__ == "__main__":
+#     port = int(RENDER_PORT) 
+#     app.logger.info(f"Starting Flask app on host 0.0.0.0 and port {port}")
+#     app.run(host='0.0.0.0', port=port, threaded=True)
