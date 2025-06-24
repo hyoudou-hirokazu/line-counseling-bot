@@ -61,21 +61,17 @@ except Exception as e:
 try:
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel(
-        'gemini-pro',
+        'gemini-flash', # ここを 'gemini-flash' に変更
         safety_settings={
-            # HarmCategoryの属性名が変更された場合に対応 (例: HARASSMENT -> HARM_CATEGORY_HARASSMENT)
-            # 現在のgoogle-generativeai SDKバージョン 0.5.0 に合わせて修正済み
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
             HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
             HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
     )
-    logging.info("Gemini API configured successfully.")
+    logging.info("Gemini API configured successfully using 'gemini-flash' model.")
 except Exception as e:
-    # Gemini APIの設定失敗時はアプリケーションを起動させない。
-    # APIキーが間違っているか、ライブラリのバージョンが合っていない可能性が高い。
-    logging.critical(f"Failed to configure Gemini API: {e}. Please check GEMINI_API_KEY and 'google-generativeai' library version in requirements.txt.")
+    logging.critical(f"Failed to configure Gemini API: {e}. Please check GEMINI_API_KEY and 'google-generativeai' library version in requirements.txt. Also ensure 'gemini-flash' model is available for your API Key/Region.")
     raise Exception(f"Gemini API configuration failed: {e}")
 
 
@@ -145,27 +141,21 @@ def handle_message(event):
     try:
         gemini_response = gemini_model.generate_content(user_message)
         
-        # Geminiの応答オブジェクトの形式はAPIのバージョンや応答内容によって異なる可能性があるため、
-        # より堅牢なチェックを行う
         if gemini_response and hasattr(gemini_response, 'text'):
             response_text = gemini_response.text
         elif isinstance(gemini_response, list) and gemini_response and hasattr(gemini_response[0], 'text'):
-            # 応答がリストで、その最初の要素にtext属性がある場合
             response_text = gemini_response[0].text
         else:
-            # 予期せぬ応答形式の場合
             logging.warning(f"Unexpected Gemini response format or no text content: {gemini_response}")
             response_text = "Geminiからの応答形式が予期せぬものでした。"
 
         app.logger.info(f"Gemini generated response: '{response_text}'")
 
     except Exception as e:
-        # Gemini APIとの通信エラーをログに記録し、ユーザーにエラーを通知
         logging.error(f"Error interacting with Gemini API: {e}", exc_info=True)
         response_text = "Geminiとの通信中にエラーが発生しました。時間を置いてお試しください。"
 
     finally:
-        # 最終的にLINEに返信する
         try:
             line_bot_api.reply_message(
                 ReplyMessageRequest(
@@ -175,11 +165,8 @@ def handle_message(event):
             )
             app.logger.info("Reply sent to LINE successfully.")
         except Exception as e:
-            # LINEへの返信失敗もログに記録
             logging.error(f"Error replying to LINE: {e}", exc_info=True)
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
-    # RenderはGunicornなどで起動するため、app.runは直接本番環境では使われないが、
-    # ローカル開発用に残しておく。
     app.run(host='0.0.0.0', port=port)
