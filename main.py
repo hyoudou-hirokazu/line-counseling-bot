@@ -2,9 +2,9 @@ import os
 import logging
 from flask import Flask, request, abort
 from dotenv import load_dotenv
-import datetime # 日付/時刻を扱うために追加
-import time # ★追加: 遅延処理のためにtimeモジュールをインポート
-import random # ★追加: ランダムな遅延のためにrandomモジュールをインポート
+import datetime
+import time
+import random
 
 # LINE Bot SDK v3 のインポート
 from linebot.v3.webhook import WebhookHandler
@@ -80,7 +80,7 @@ except Exception as e:
 # --- カウンセリング関連の設定 ---
 MAX_GEMINI_REQUESTS_PER_DAY = 20    # 1ユーザーあたり1日20回まで (無料枠考慮)
 
-# ★プロンプトを調整: 自然な問いかけをGeminiに生成させるよう指示
+# プロンプトを調整: 自然な問いかけをGeminiに生成させるよう指示
 COUNSELING_SYSTEM_PROMPT = """
 あなたは「こころコンパス」という名前のAIカウンセラーです。
 ユーザーの心に寄り添い、羅針盤のように道を照らす存在として会話してください。
@@ -269,12 +269,9 @@ def handle_message(event):
         user_sessions[user_id]['last_request_date'] = current_date # リクエスト日を更新
         app.logger.info(f"User {user_id} - Request count: {user_sessions[user_id]['request_count']}")
 
-        # ★追加: ここに遅延処理を挿入
-        # 1.5秒から3.5秒のランダムな遅延を入れることで、自然な「間」を演出
-        delay_seconds = random.uniform(1.5, 3.5)
+        # ★変更: ここに遅延処理を挿入（範囲を5.0秒から10.0秒に調整）
+        delay_seconds = random.uniform(5.0, 10.0)
         time.sleep(delay_seconds)
-
-        # ★変更: プロンプトで問いかけを含ませるように指示したため、コード側での一律追加は削除
 
     except Exception as e:
         logging.error(f"Error interacting with Gemini API for user {user_id}: {e}", exc_info=True)
