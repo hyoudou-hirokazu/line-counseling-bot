@@ -3,6 +3,8 @@ import logging
 from flask import Flask, request, abort
 from dotenv import load_dotenv
 import datetime # 日付/時刻を扱うために追加
+import time # ★追加: 遅延処理のためにtimeモジュールをインポート
+import random # ★追加: ランダムな遅延のためにrandomモジュールをインポート
 
 # LINE Bot SDK v3 のインポート
 from linebot.v3.webhook import WebhookHandler
@@ -78,6 +80,7 @@ except Exception as e:
 # --- カウンセリング関連の設定 ---
 MAX_GEMINI_REQUESTS_PER_DAY = 20    # 1ユーザーあたり1日20回まで (無料枠考慮)
 
+# ★プロンプトを調整: 自然な問いかけをGeminiに生成させるよう指示
 COUNSELING_SYSTEM_PROMPT = """
 あなたは「こころコンパス」という名前のAIカウンセラーです。
 ユーザーの心に寄り添い、羅針盤のように道を照らす存在として会話してください。
@@ -96,6 +99,7 @@ COUNSELING_SYSTEM_PROMPT = """
 * 自然な会話のキャッチボールを意識し、一方的な情報提供にならないようにしてください。
 * 専門用語は避け、分かりやすい言葉で説明してください。
 * 返答は長すぎず、ユーザーが読みやすい適切な長さに調整してください。
+* **返答の最後に、ユーザーが追加で話したくなるような、文脈に合った自然な問いかけや、次の発言を促す言葉を必ず含めてください。** 例：「〜と感じられたのですね。もう少し詳しくお聞かせいただけますか？」「〜について、他に何か思い当たることはありますか？」「今はどのようなお気持ちでしょうか？」など、その時の会話の流れに合わせた多様な問いかけをお願いします。
 * 安全を最優先し、緊急性の高い内容（自殺念慮など）を察知した場合は、専門機関への相談を促す旨を伝えてください。（ただし、AIには限界があることを理解し、直接的な医療行為や診断は行わないでください。）
 
 **Gemini APIの無料枠を考慮し、無駄なトークン消費を避けるため、簡潔かつ的確な応答を心がけてください。また、同じような質問の繰り返しは避け、会話の進展を促してください。**
@@ -109,6 +113,7 @@ GEMINI_LIMIT_MESSAGE = (
     "もし緊急の場合は、以下のような公的な相談窓口もご利用いただけます。\n"
     "・こころの健康相談統一ダイヤル: 0570-064-556\n"
     "・いのちの電話: 0120-783-556\n\n"
+    "また、AIによるセルフヘルプコンテンツ（例：リラックス法、簡単な思考整理シートなど）は引き続きご利用いただけます。\n"
 )
 # 過去の会話履歴をGeminiに渡す最大ターン数
 MAX_CONTEXT_TURNS = 6 # (ユーザーの発言 + AIの返答) の合計ターン数、トークン消費と相談して調整
@@ -125,13 +130,13 @@ user_sessions = {}
 def callback():
     signature = request.headers.get('X-Line-Signature')
     body = request.get_data(as_text=True)
-    
+
     if not signature:
         app.logger.error("X-Line-Signature header is missing.")
         abort(400) # 署名がない場合は不正なリクエストとして処理
 
     app.logger.info("Received Webhook Request:")
-    app.logger.info("  Request body (truncated to 500 chars): " + body[:500])  
+    app.logger.info("  Request body (truncated to 500 chars): " + body[:500])
     app.logger.info(f"  X-Line-Signature: {signature}")
 
     # --- 署名検証のデバッグログ ---
@@ -140,7 +145,7 @@ def callback():
         body_bytes = body.encode('utf-8')
         hash_value = hmac.new(secret_bytes, body_bytes, hashlib.sha256).digest()
         calculated_signature = base64.b64encode(hash_value).decode('utf-8')
-        
+
         app.logger.info(f"  Calculated signature (manual): {calculated_signature}")
         app.logger.info(f"  Channel Secret used for manual calc (first 5 chars): {CHANNEL_SECRET[:5]}...")
 
@@ -149,7 +154,7 @@ def callback():
             app.logger.error(f"    Calculated: {calculated_signature}")
             app.logger.error(f"    Received:    {signature}")
             # 手動計算で不一致が検出された場合は、SDK処理に入る前に終了
-            abort(400) 
+            abort(400)
         else:
             app.logger.info("  Manual signature check: Signatures match! Proceeding to SDK handler.")
 
@@ -186,7 +191,7 @@ def handle_message(event):
 
     # ユーザーセッションの初期化または取得
     current_date = datetime.date.today()
-    
+
     # 新規ユーザーまたはセッションリセットのロジックをより堅牢に
     if user_id not in user_sessions or user_sessions[user_id]['last_request_date'] != current_date:
         # 日付が変わった場合、または新規ユーザーの場合、セッションをリセット
@@ -196,7 +201,7 @@ def handle_message(event):
             'last_request_date': current_date
         }
         app.logger.info(f"Initialized/Reset session for user_id: {user_id}. First message of the day or new user.")
-        
+
         # 初回メッセージを送信し、このリクエストの処理を終了
         response_text = INITIAL_MESSAGE
         try:
@@ -232,7 +237,7 @@ def handle_message(event):
     chat_history_for_gemini.append({'role': 'model', 'parts': [{'text': "はい、承知いたしました。こころコンパスとして、心を込めてお話をお伺いします。"}]})
 
     start_index = max(0, len(user_sessions[user_id]['history']) - MAX_CONTEXT_TURNS * 2)
-    
+
     app.logger.debug(f"Current history length for user {user_id}: {len(user_sessions[user_id]['history'])}. Taking from index {start_index}.")
 
     for role, text_content in user_sessions[user_id]['history'][start_index:]:
@@ -258,11 +263,18 @@ def handle_message(event):
         # 会話履歴を更新
         user_sessions[user_id]['history'].append(['user', user_message])
         user_sessions[user_id]['history'].append(['model', response_text])
-        
+
         # リクエスト数をインクリメント
         user_sessions[user_id]['request_count'] += 1
         user_sessions[user_id]['last_request_date'] = current_date # リクエスト日を更新
         app.logger.info(f"User {user_id} - Request count: {user_sessions[user_id]['request_count']}")
+
+        # ★追加: ここに遅延処理を挿入
+        # 1.5秒から3.5秒のランダムな遅延を入れることで、自然な「間」を演出
+        delay_seconds = random.uniform(1.5, 3.5)
+        time.sleep(delay_seconds)
+
+        # ★変更: プロンプトで問いかけを含ませるように指示したため、コード側での一律追加は削除
 
     except Exception as e:
         logging.error(f"Error interacting with Gemini API for user {user_id}: {e}", exc_info=True)
@@ -281,9 +293,3 @@ def handle_message(event):
             logging.error(f"Error replying to LINE for user {user_id}: {e}", exc_info=True)
 
     return 'OK'
-
-# Flask開発サーバーの直接起動は削除。代わりにGunicornを使う。
-# if __name__ == "__main__":
-#     port = int(RENDER_PORT) 
-#     app.logger.info(f"Starting Flask app on host 0.0.0.0 and port {port}")
-#     app.run(host='0.0.0.0', port=port, threaded=True)
