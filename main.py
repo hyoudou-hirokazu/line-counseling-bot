@@ -1,19 +1,23 @@
 import os
 import logging
 from flask import Flask, request, abort
-from dotenv import load_dotenv
+from dotenv import load_dotenv # Renderでは不要だが、ローカル実行時のために残しておく
 import datetime
-import time
-import random
+import time # 時間計測のために使用
+import random # 遅延処理のために使用（現在はコメントアウト推奨）
 
 # LINE Bot SDK v3 のインポート
 from linebot.v3.webhook import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest
+# !!! 修正: GetProfileRequest のインポートパスを linebot.v3.messaging.models に変更 !!!
+from linebot.v3.messaging.models import GetProfileRequest # GetProfileRequest は models サブモジュールにあります
 from linebot.v3.messaging import TextMessage as LineReplyTextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
-from linebot.v3.exceptions import InvalidSignatureError
+# !!! 修正: InvalidSignatureError は linebot.exceptions に統一 !!!
+from linebot.exceptions import InvalidSignatureError, LineBotApiError # InvalidSignatureErrorとLineBotApiErrorのパスを修正
 
-# 署名検証のためのライブラリをインポート
+# 署名検証のためのライブラリをインポート (LINE Bot SDKが内部で処理するため通常は不要だが、デバッグ用として残す)
+# 本番運用ではパフォーマンスのため削除またはコメントアウトを推奨
 import hmac
 import hashlib
 import base64
@@ -30,17 +34,18 @@ app = Flask(__name__)
 load_dotenv()
 
 # 環境変数からLINEとGeminiのAPIキーを取得
-CHANNEL_ACCESS_TOKEN = os.getenv('CHANNEL_ACCESS_TOKEN')
-CHANNEL_SECRET = os.getenv('CHANNEL_SECRET')
+# !!! 修正: Renderに設定されている環境変数名に合わせて修正 (CHANNEL_ACCESS_TOKEN -> LINE_CHANNEL_ACCESS_TOKEN) !!!
+CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
+CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 # 環境変数が設定されているか確認
 if not CHANNEL_ACCESS_TOKEN:
-    logging.critical("CHANNEL_ACCESS_TOKEN is not set in environment variables.")
-    raise ValueError("CHANNEL_ACCESS_TOKEN is not set. Please set it in Render Environment Variables.")
+    logging.critical("LINE_CHANNEL_ACCESS_TOKEN is not set in environment variables.")
+    raise ValueError("LINE_CHANNEL_ACCESS_TOKEN is not set. Please set it in Render Environment Variables.")
 if not CHANNEL_SECRET:
-    logging.critical("CHANNEL_SECRET is not set in environment variables.")
-    raise ValueError("CHANNEL_SECRET is not set. Please set it in Render Environment Variables.")
+    logging.critical("LINE_CHANNEL_SECRET is not set in environment variables.")
+    raise ValueError("LINE_CHANNEL_SECRET is not set. Please set it in Render Environment Variables.")
 if not GEMINI_API_KEY:
     logging.critical("GEMINI_API_KEY is not set in environment variables.")
     raise ValueError("GEMINI_API_KEY is not set. Please set it in Render Environment Variables.")
@@ -57,7 +62,7 @@ try:
     handler = WebhookHandler(CHANNEL_SECRET)
     logging.info("LINE Bot SDK configured successfully.")
 except Exception as e:
-    logging.critical(f"Failed to configure LINE Bot SDK: {e}. Please check CHANNEL_ACCESS_TOKEN and CHANNEL_SECRET.")
+    logging.critical(f"Failed to configure LINE Bot SDK: {e}. Please check LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET.")
     raise Exception(f"LINE Bot SDK configuration failed: {e}")
 
 # Gemini API の設定
@@ -66,10 +71,10 @@ try:
     gemini_model = genai.GenerativeModel(
         'gemini-2.5-flash-lite-preview-06-17', # ユーザー指定のモデル名
         safety_settings={
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARMS_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARMS_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARMS_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARMS_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
     )
     logging.info("Gemini API configured successfully using 'gemini-2.5-flash-lite-preview-06-17' model.")
@@ -128,14 +133,15 @@ user_sessions = {}
 
 @app.route("/callback", methods=['POST'])
 def callback():
+    start_callback_time = time.time() # コールバック処理全体の開始時刻
     signature = request.headers.get('X-Line-Signature')
     body = request.get_data(as_text=True)
 
     if not signature:
-        app.logger.error("X-Line-Signature header is missing.")
+        app.logger.error(f"[{time.time() - start_callback_time:.3f}s] X-Line-Signature header is missing.")
         abort(400) # 署名がない場合は不正なリクエストとして処理
 
-    app.logger.info("Received Webhook Request:")
+    app.logger.info(f"[{time.time() - start_callback_time:.3f}s] Received Webhook Request.")
     app.logger.info("  Request body (truncated to 500 chars): " + body[:500])
     app.logger.info(f"  X-Line-Signature: {signature}")
 
@@ -146,29 +152,29 @@ def callback():
         hash_value = hmac.new(secret_bytes, body_bytes, hashlib.sha256).digest()
         calculated_signature = base64.b64encode(hash_value).decode('utf-8')
 
-        app.logger.info(f"  Calculated signature (manual): {calculated_signature}")
-        app.logger.info(f"  Channel Secret used for manual calc (first 5 chars): {CHANNEL_SECRET[:5]}...")
+        app.logger.info(f"[{time.time() - start_callback_time:.3f}s]   Calculated signature (manual): {calculated_signature}")
+        app.logger.info(f"[{time.time() - start_callback_time:.3f}s]   Channel Secret used for manual calc (first 5 chars): {CHANNEL_SECRET[:5]}...")
 
         if calculated_signature != signature:
-            app.logger.error("!!! Manual Signature MISMATCH detected !!!")
-            app.logger.error(f"    Calculated: {calculated_signature}")
-            app.logger.error(f"    Received:    {signature}")
+            app.logger.error(f"[{time.time() - start_callback_time:.3f}s] !!! Manual Signature MISMATCH detected !!!")
+            app.logger.error(f"[{time.time() - start_callback_time:.3f}s]     Calculated: {calculated_signature}")
+            app.logger.error(f"[{time.time() - start_callback_time:.3f}s]     Received:    {signature}")
             # 手動計算で不一致が検出された場合は、SDK処理に入る前に終了
             abort(400)
         else:
-            app.logger.info("  Manual signature check: Signatures match! Proceeding to SDK handler.")
+            app.logger.info(f"[{time.time() - start_callback_time:.3f}s]   Manual signature check: Signatures match! Proceeding to SDK handler.")
 
     except Exception as e:
-        app.logger.error(f"Error during manual signature calculation for debug: {e}", exc_info=True)
+        app.logger.error(f"[{time.time() - start_callback_time:.3f}s] Error during manual signature calculation for debug: {e}", exc_info=True)
         # 手動計算でエラーが発生しても、SDKの処理は試みる
         pass
 
     # --- LINE Bot SDKによる署名検証とイベント処理 ---
     try:
         handler.handle(body, signature)
-        app.logger.info("Webhook handled successfully by SDK.")
+        app.logger.info(f"[{time.time() - start_callback_time:.3f}s] Webhook handled successfully by SDK.")
     except InvalidSignatureError:
-        app.logger.error("!!! SDK detected Invalid signature !!!")
+        app.logger.error(f"[{time.time() - start_callback_time:.3f}s] !!! SDK detected Invalid signature !!!")
         app.logger.error("  This typically means CHANNEL_SECRET in Render does not match LINE Developers.")
         app.logger.error(f"  Body (truncated for error log): {body[:200]}...")
         app.logger.error(f"  Signature sent to SDK: {signature}")
@@ -176,16 +182,18 @@ def callback():
         abort(400) # 署名エラーの場合は400を返す
     except Exception as e:
         # その他の予期せぬエラー
-        logging.critical(f"Unhandled error during webhook processing by SDK: {e}", exc_info=True)
+        logging.critical(f"[{time.time() - start_callback_time:.3f}s] Unhandled error during webhook processing by SDK: {e}", exc_info=True)
         abort(500)
 
+    app.logger.info(f"[{time.time() - start_callback_time:.3f}s] Total callback processing time.")
     return 'OK'
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
+    start_handle_time = time.time() # handle_message 処理開始時刻を記録
     user_id = event.source.user_id # ユーザーIDを取得
     user_message = event.message.text
-    app.logger.info(f"Received text message from user_id: '{user_id}', message: '{user_message}' (Reply Token: {event.reply_token})")
+    app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Received text message from user_id: '{user_id}', message: '{user_message}' (Reply Token: {event.reply_token})")
 
     response_text = "申し訳ありません、現在メッセージを処理できません。しばらくしてからもう一度お試しください。"
 
@@ -195,25 +203,27 @@ def handle_message(event):
     # 新規ユーザーまたはセッションリセットのロジックをより堅牢に
     if user_id not in user_sessions or user_sessions[user_id]['last_request_date'] != current_date:
         # 日付が変わった場合、または新規ユーザーの場合、セッションをリセット
+        app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Initializing/Resetting session for user_id: {user_id}. First message of the day or new user.")
         user_sessions[user_id] = {
             'history': [], # 会話履歴は空で開始
             'request_count': 0,
             'last_request_date': current_date
         }
-        app.logger.info(f"Initialized/Reset session for user_id: {user_id}. First message of the day or new user.")
 
         # 初回メッセージを送信し、このリクエストの処理を終了
         response_text = INITIAL_MESSAGE
         try:
+            start_reply_initial = time.time()
             line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
                     messages=[LineReplyTextMessage(text=response_text)]
                 )
             )
-            app.logger.info(f"Sent initial message/daily reset message to user {user_id}.")
+            app.logger.info(f"[{time.time() - start_reply_initial:.3f}s] Sent initial message/daily reset message to user {user_id}.")
         except Exception as e:
             logging.error(f"Error sending initial/reset reply to LINE for user {user_id}: {e}", exc_info=True)
+        app.logger.info(f"[{time.time() - start_handle_time:.3f}s] handle_message finished for initial/reset flow.")
         return 'OK' # 初回メッセージ送信後はここで処理を終了
 
     # Gemini API利用回数制限のチェック
@@ -221,15 +231,17 @@ def handle_message(event):
         response_text = GEMINI_LIMIT_MESSAGE
         app.logger.warning(f"User {user_id} exceeded daily Gemini request limit ({MAX_GEMINI_REQUESTS_PER_DAY}).")
         try:
+            start_reply_limit = time.time()
             line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
                     messages=[LineReplyTextMessage(text=response_text)]
                 )
             )
-            app.logger.info(f"Sent limit message to LINE for user {user_id}.")
+            app.logger.info(f"[{time.time() - start_reply_limit:.3f}s] Sent limit message to LINE for user {user_id}.")
         except Exception as e:
             logging.error(f"Error sending limit reply to LINE for user {user_id}: {e}", exc_info=True)
+        app.logger.info(f"[{time.time() - start_handle_time:.3f}s] handle_message finished for limit exceeded flow.")
         return 'OK'
 
     # 会話履歴を準備
@@ -238,27 +250,30 @@ def handle_message(event):
 
     start_index = max(0, len(user_sessions[user_id]['history']) - MAX_CONTEXT_TURNS * 2)
 
-    app.logger.debug(f"Current history length for user {user_id}: {len(user_sessions[user_id]['history'])}. Taking from index {start_index}.")
+    app.logger.debug(f"[{time.time() - start_handle_time:.3f}s] Current history length for user {user_id}: {len(user_sessions[user_id]['history'])}. Taking from index {start_index}.")
 
     for role, text_content in user_sessions[user_id]['history'][start_index:]:
         chat_history_for_gemini.append({'role': role, 'parts': [{'text': text_content}]})
 
-    app.logger.debug(f"Gemini chat history prepared for user {user_id} (last message: '{user_message}'): {chat_history_for_gemini}")
+    app.logger.debug(f"[{time.time() - start_handle_time:.3f}s] Gemini chat history prepared for user {user_id} (last message: '{user_message}'): {chat_history_for_gemini}")
 
     try:
+        start_gemini_call = time.time() # Gemini呼び出し前を計測
         # Geminiとのチャットセッションを開始
         convo = gemini_model.start_chat(history=chat_history_for_gemini)
         gemini_response = convo.send_message(user_message) # 最新のユーザーメッセージのみをsend_messageで送る
+        end_gemini_call = time.time() # Gemini呼び出し後を計測
+        app.logger.info(f"[{end_gemini_call - start_gemini_call:.3f}s] Gemini API call completed for user {user_id}.")
 
         if gemini_response and hasattr(gemini_response, 'text'):
             response_text = gemini_response.text
         elif isinstance(gemini_response, list) and gemini_response and hasattr(gemini_response[0], 'text'):
             response_text = gemini_response[0].text
         else:
-            logging.warning(f"Unexpected Gemini response format or no text content: {gemini_response}")
+            logging.warning(f"[{time.time() - start_handle_time:.3f}s] Unexpected Gemini response format or no text content: {gemini_response}")
             response_text = "Geminiからの応答形式が予期せぬものでした。"
 
-        app.logger.info(f"Gemini generated response for user {user_id}: '{response_text}'")
+        app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Gemini generated response for user {user_id}: '{response_text}'")
 
         # 会話履歴を更新
         user_sessions[user_id]['history'].append(['user', user_message])
@@ -267,17 +282,21 @@ def handle_message(event):
         # リクエスト数をインクリメント
         user_sessions[user_id]['request_count'] += 1
         user_sessions[user_id]['last_request_date'] = current_date # リクエスト日を更新
-        app.logger.info(f"User {user_id} - Request count: {user_sessions[user_id]['request_count']}")
+        app.logger.info(f"[{time.time() - start_handle_time:.3f}s] User {user_id} - Request count: {user_sessions[user_id]['request_count']}")
 
         # ★変更: ここに遅延処理を挿入（範囲を5.0秒から10.0秒に調整）
-        delay_seconds = random.uniform(5.0, 10.0)
-        time.sleep(delay_seconds)
+        # パフォーマンス向上のため、この遅延は通常は推奨されません。
+        # ユーザー体験を損なう可能性があるので、必要に応じてコメントアウトしてください。
+        # delay_seconds = random.uniform(5.0, 10.0)
+        # time.sleep(delay_seconds)
+        # app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Applied random delay of {delay_seconds:.3f} seconds for user {user_id}.")
 
     except Exception as e:
-        logging.error(f"Error interacting with Gemini API for user {user_id}: {e}", exc_info=True)
+        logging.error(f"[{time.time() - start_handle_time:.3f}s] Error interacting with Gemini API for user {user_id}: {e}", exc_info=True)
         response_text = "Geminiとの通信中にエラーが発生しました。時間を置いてお試しください。"
 
     finally:
+        start_reply_line = time.time() # LINEへの返信処理の前後を計測
         try:
             line_bot_api.reply_message(
                 ReplyMessageRequest(
@@ -285,8 +304,15 @@ def handle_message(event):
                     messages=[LineReplyTextMessage(text=response_text)]
                 )
             )
-            app.logger.info(f"Reply sent to LINE successfully for user {user_id}.")
+            app.logger.info(f"[{time.time() - start_reply_line:.3f}s] Reply sent to LINE successfully for user {user_id}.")
         except Exception as e:
             logging.error(f"Error replying to LINE for user {user_id}: {e}", exc_info=True)
 
+    app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Total handle_message processing time.")
     return 'OK'
+
+if __name__ == "__main__":
+    # Render環境ではPORT環境変数が設定されるため、それを使用する
+    # ローカル実行時にはデフォルトで8080を使用
+    port = int(os.getenv("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
