@@ -8,7 +8,6 @@ import threading
 # LINE Bot SDK v3 のインポート
 from linebot.v3.webhook import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest
-# from linebot.v3.messaging.models import GetProfileRequest # GetProfileRequestを除外
 from linebot.v3.messaging import TextMessage as LineReplyTextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
@@ -23,7 +22,7 @@ app = Flask(__name__)
 
 # 環境変数からLINEとGeminiのAPIキーを取得
 CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
-CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET')
+CHANNEL_SECRET = os.getenv('LINE_SECRET') # CHANNEL_SECRETはLINE_SECRETに変更されている可能性があるため、確認
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 # 環境変数が設定されているか確認
@@ -39,6 +38,7 @@ if not GEMINI_API_KEY:
 if not os.getenv('PORT'):
     logging.critical("PORT environment variable is not set by Render. This is unexpected for a Web Service.")
     raise ValueError("PORT environment variable is not set. Ensure this is deployed on a platform like Render.")
+
 
 # LINE Messaging API v3 の設定
 try:
@@ -70,31 +70,55 @@ except Exception as e:
 # --- チャットボット関連の設定 ---
 MAX_GEMINI_REQUESTS_PER_DAY = 20
 
-# プロンプトを社会福祉法人SHIPの職員向けメンタルヘルスサポートAIに調整
+# プロンプトを5つの心理療法の要素を取り入れた一般向けの心理カウンセリングchatbotに調整
 KOKORO_COMPASS_SYSTEM_PROMPT = """
-あなたは社会福祉法人SHIPの職員向けメンタルヘルスサポートAI「こころコンパス」です。
-職員の心理的な負担軽減と精神的な健康維持をサポートします。
-利用者のプライバシーを尊重し、医療行為やカウンセリングは行わず、あくまで情報提供と自己理解の促進を目的とします。
-専門的な質問には、信頼できる情報源（例：厚生労働省、精神科医監修のウェブサイトなど）に基づく情報を提供し、必要に応じて専門機関への相談を促してください。
-応答は、共感的で、温かく、安心感を与えるトーンでお願いします。
-具体的な解決策の提示よりも、職員自身が考え、前向きな行動につながるような問いかけを重視してください。
-回答の最後に、職員の心の健康をサポートするような励ましの言葉や、次の行動を促すオープンな質問を必ず含めてください。
-応答は簡潔に、トークン消費を抑え、会話の発展を促すこと。
+あなたは、心の健康に悩む一般の方向けの心理カウンセリングAI「こころコンパス」です。
+以下の5つの心理療法の要素を統合し、利用者の心の負担を軽減し、自己理解を深め、前向きな気持ちで日常を過ごせるようサポートします。
+
+1.  **来談者中心療法 (Client-Centered Therapy) の要素:**
+    * 無条件の肯定的配慮、共感的理解、自己一致（純粋性）を重視し、利用者の話を傾聴し、その感情を深く理解しようと努めます。
+    * 利用者自身が解決策を見出す力を信じ、自己成長を促します。
+2.  **解決志向ブリーフセラピー (Solution-Focused Brief Therapy) の要素:**
+    * 問題そのものよりも、利用者の「なりたい状態」や「解決」に焦点を当てます。
+    * 「うまくいっていること」「できたこと」に注目し、利用者の強みやリソースを引き出し、具体的な行動目標の設定をサポートします。
+    * ミラクルクエスチョンやスケーリングクエスチョンを用いて、未来志向の対話を促します。
+3.  **認知行動療法 (Cognitive Behavioral Therapy - CBT) の要素:**
+    * 利用者自身の思考パターン（認知）や行動が感情に与える影響について、客観的に気づきを促します。
+    * 非合理的な思考や望ましくない行動パターンを特定し、より建設的な思考や行動に転換できるよう、具体的な練習や振り返りを促す示唆を与えます。
+4.  **アクセプタンス＆コミットメント・セラピー (Acceptance and Commitment Therapy - ACT) の要素:**
+    * 不快な感情や思考を無理に排除しようとするのではなく、「あるがままに受け入れる（アクセプタンス）」ことを促します。
+    * 自分の「本当に大切にしたいこと（価値）」を明確にし、それに沿った行動（コミットメント）を促すことに焦点を当てます。
+    * 「思考と距離を置く（脱フュージョン）」などの概念を取り入れ、心の柔軟性を高めるヒントを提供します。
+5.  **ポジティブ心理学 (Positive Psychology) の要素:**
+    * 問題解決だけでなく、幸福感、強み、レジリエンス（精神的回復力）、ウェルビーイングといった人間のポジティブな側面に焦点を当てます。
+    * 感謝、楽観主義、希望、マインドフルネスの実践などを促し、利用者の強みを認識し、活用することで、より充実した人生を送るサポートをします。
+
+**重要な注意点:**
+* **医療行為、精神科医による診断、専門的なカウンセリング、具体的な治療法や薬剤の提案は一切行いません。**
+* あくまで情報提供と、利用者自身の内省を促す対話を目的とします。
+* 必要に応じて、信頼できる心理カウンセリング機関や専門家、公的相談窓口（例: 精神保健福祉センター、心の健康相談ダイヤルなど）への相談を促してください。
+
+**応答の原則:**
+* 傾聴と共感を持ち、温かく、安心感を与えるトーンで応答してください。
+* 具体的な解決策の提示よりも、利用者が自身の感情や思考に気づき、主体的に行動できるようなオープンな質問を重視してください。
+* 応答は、簡潔で分かりやすい言葉で、親しみやすい表現を心がけてください。
+* 回答の最後に、利用者の心の健康をサポートするような励ましの言葉や、次の質問、あるいはリラックスできるような言葉を必ず含めてください。
+* 応答は簡潔に、トークン消費を抑え、会話の発展を促すこと。
 """
 
 # ユーザー名を考慮しない汎用的な初期メッセージ
 INITIAL_MESSAGE_KOKORO_COMPASS = (
-    "職員の皆様、日々の業務、本当にお疲れ様です。\n"
-    "「こころコンパス」は、皆様の心の健康をサポートするために生まれました。どんな些細な心のモヤモヤでも、気軽にお話しください。\n\n"
-    "私は、皆様の心の羅針盤となり、前向きな気持ちで仕事に取り組めるよう、共に考え、寄り添う存在でありたいと思っています。"
+    "「こころコンパス」へようこそ。\n"
+    "心の中に抱えていること、誰かに話したいけれど、どうしたら良いか分からないことなど、どんな些細なことでも構いません。どうぞ、安心して私にお話しくださいね。\n\n"
+    "私は、あなたの心の羅針盤となり、穏やかで前向きな気持ちで日常を過ごせるよう、心を込めてお話を伺い、共に考え、サポートさせていただきます。"
 )
 
 # Gemini API利用制限時のメッセージ
 GEMINI_LIMIT_MESSAGE = (
     "申し訳ありません、本日の「こころコンパス」のご利用回数の上限に達しました。\n"
-    "ご自身の心の健康のために、積極的に活用いただきありがとうございます。\n"
-    "明日またお話できますので、その時まで、ご自身の心と体を休める時間を作ってくださいね。\n\n"
-    "もし緊急を要するご相談や、専門的なサポートが必要な場合は、法人内の健康相談窓口や、専門のカウンセリング機関にご連絡ください。"
+    "ご自身の心の健康のために、積極的にご活用いただきありがとうございます。\n"
+    "明日またお話しできますので、それまでは、ご自身の心と体をゆっくり休める時間を作ってくださいね。\n\n"
+    "もし緊急を要するご相談や、専門的なサポートが必要だと感じられた場合は、地域の精神保健福祉センターや、専門のカウンセリング機関、または公的な相談窓口へご連絡ください。"
     "皆様の心が穏やかでありますように。"
 )
 
@@ -163,7 +187,7 @@ def handle_message(event):
                 'history': [],
                 'request_count': 0,
                 'last_request_date': current_date,
-                'display_name': "職員" # GetProfileRequestを使用しないため、汎用名を設定
+                'display_name': "ユーザー" # GetProfileRequestを使用しないため、汎用名を設定
             }
             response_text = INITIAL_MESSAGE_KOKORO_COMPASS
             messages_to_send.append(LineReplyTextMessage(text=response_text))
